@@ -135,26 +135,54 @@ document.addEventListener('DOMContentLoaded', () => {
 function saveTeamSetup() {
   const teamAName = document.getElementById('teamAName').value.trim();
   const teamBName = document.getElementById('teamBName').value.trim();
-  const overs = parseInt(document.getElementById('oversPerInnings').value, 10) || 20;
-  const playersA = parseInt(document.getElementById('teamAPlayers').value, 10) || 11;
-  const playersB = parseInt(document.getElementById('teamBPlayers').value, 10) || 11;
+  const oversVal  = document.getElementById('oversPerInnings').value.trim();
+  const playersAVal = document.getElementById('teamAPlayers').value.trim();
+  const playersBVal = document.getElementById('teamBPlayers').value.trim();
 
   const err = document.getElementById('team-setup-error');
-  if (!teamAName || !teamBName) {
-    if (err) err.textContent = 'Both team names are required.';
+
+  const showErr = (msg) => {
+    if (err) {
+      err.textContent = msg;
+      err.style.display = 'block';
+    }
+  };
+
+  if (!teamAName || !teamBName || !oversVal || !playersAVal || !playersBVal) {
+    showErr('All fields are mandatory. Please fill team names, players and overs.');
     return;
   }
 
-  state.teamA = teamAName; state.teamB = teamBName;
-  state.oversPerInnings = overs; state.playersA = playersA; state.playersB = playersB;
+  const overs    = parseInt(oversVal, 10);
+  const playersA = parseInt(playersAVal, 10);
+  const playersB = parseInt(playersBVal, 10);
+
+  if (isNaN(overs) || overs <= 0 || isNaN(playersA) || playersA <= 1 || isNaN(playersB) || playersB <= 1) {
+    showErr('Enter valid positive numbers: overs > 0 and players ≥ 2 for both teams.');
+    return;
+  }
+
+  if (err) {
+    err.textContent = '';
+    err.style.display = 'none';
+  }
+
+  state.teamA = teamAName;
+  state.teamB = teamBName;
+  state.oversPerInnings = overs;
+  state.playersA = playersA;
+  state.playersB = playersB;
 
   localStorage.setItem('teamA', teamAName);
   localStorage.setItem('teamB', teamBName);
   localStorage.setItem('oversPerInnings', overs);
+  localStorage.setItem('playersA', playersA);
+  localStorage.setItem('playersB', playersB);
 
   populateTossCaller();
   goToPage('page-toss');
 }
+
 
 function populateTossCaller() {
   const select = document.getElementById('tossCaller');
