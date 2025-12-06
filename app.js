@@ -653,6 +653,11 @@ function updateInnings2Display() {
   const rrrEl = document.getElementById('innings2-rrr');
   const neededEl = document.getElementById('innings2-needed');
 
+  const totalBalls  = state.oversPerInnings * 6;
+  const ballsBowled = state.balls2;
+  const ballsLeft   = Math.max(0, totalBalls - ballsBowled);
+
+  const needBallsEl = document.getElementById('innings2-needed-balls');
   if (scoreEl) scoreEl.textContent = `${state.runs2}/${state.wickets2}`;
   if (oversEl) oversEl.textContent = `${Math.floor(state.balls2 / 6)}.${state.balls2 % 6} Overs`;
 
@@ -678,6 +683,9 @@ function updateInnings2Display() {
       showInnings2ResultModal('Innings Complete');
     }
   }
+  if (needBallsEl) {
+      needBallsEl.textContent = `Need ${needed} run(s) from ${ballsLeft} ball(s)`;
+    }
 }
 
 function scoreRun(innings, r) {
