@@ -1,496 +1,973 @@
-const state = {
-  oversPerInnings: parseInt(localStorage.getItem('oversPerInnings'), 10) || 10,
-  teamA: localStorage.getItem('teamA') || '',
-  teamB: localStorage.getItem('teamB') || '',
-  playersA: parseInt(localStorage.getItem('playersA'), 10) || 11,
-  playersB: parseInt(localStorage.getItem('playersB'), 10) || 11,
-  runs1: 0, wickets1: 0, balls1: 0, innings1Ended: false,
-  runs2: 0, wickets2: 0, balls2: 0, target: 0,
-  // Per-over summaries: array of { runs, wickets, balls, events: [] }
-  overSummaries1: [{ runs: 0, wickets: 0, balls: 0, events: [] }],
-  overSummaries2: [{ runs: 0, wickets: 0, balls: 0, events: [] }],
-  tossWinner: ''
-};
+const pageFlow = [
+  'page-landing',
+  'page-team-setup',
+  'page-toss',
+  'page-innings1',
+  'page-target-mode',
+  'page-innings2',
+  'page-summary'
+];
 
-// DOM helpers
-const $ = (id) => document.getElementById(id);
+let currentPageIndex = 0;
 
-// Safe event binding (won't throw errors if element doesn't exist)
+function setCurrentPage(id) {
+  const idx = pageFlow.indexOf(id);
+  if (idx !== -1) currentPageIndex = idx;
+}
+
+function goToPageWithNav(id) {
+  goToPage(id);
+  setCurrentPage(id);
+  updateNavBar();
+}
+
+function updateNavBar() {
+  const label = document.getElementById('nav-step-label');
+  const backBtn = document.getElementById('nav-back');
+  const nextBtn = document.getElementById('nav-next');
+
+  if (!label || !backBtn || !nextBtn) return;
+
+  label.textContent = `Step ${currentPageIndex + 1} of ${pageFlow.length}`;
+
+  backBtn.disabled = currentPageIndex === 0;
+  nextBtn.disabled = currentPageIndex === pageFlow.length - 1;
+}
+const id = document.getElementById.bind(document);
+
 function on(id, event, handler) {
   const el = document.getElementById(id);
   if (el) el.addEventListener(event, handler);
 }
 
-// Switch page visibility
 function goToPage(id) {
-  document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const page = document.getElementById(id);
   if (page) page.classList.add('active');
 }
 
+let state = {
+  oversPerInnings: parseInt(localStorage.getItem('oversPerInnings'), 10) || 20,
+  teamA: localStorage.getItem('teamA') || '', teamB: localStorage.getItem('teamB') || '',
+  playersA: parseInt(localStorage.getItem('playersA'), 10) || 11,
+  playersB: parseInt(localStorage.getItem('playersB'), 10) || 11,
+  runs1: 0, wickets1: 0, balls1: 0, innings1Ended: false,
+  runs2: 0, wickets2: 0, balls2: 0, target: 0,
+  overSummaries1: [{ runs: 0, wickets: 0, balls: 0, events: [] }],
+  overSummaries2: [{ runs: 0, wickets: 0, balls: 0, events: [] }],
+  ballHistory1: [], ballHistory2: [],
+  tossWinner: ''
+};
+
 document.addEventListener('DOMContentLoaded', () => {
-  // Navigation buttons
   on('start-setup', 'click', () => goToPage('page-team-setup'));
   on('goto-target', 'click', () => goToPage('page-target-mode'));
+  on('proceedSummary', 'click', proceedToSummary);
+  on('fun-toss-btn', 'click', funToss);
+  on('show-fun-toss', 'click', () => {
+    const card = document.getElementById('fun-toss-card');
+    if (!card) return;
+    card.style.display = 'block';
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 
-  // Team setup / Toss / Innings buttons
+  on('fun-toss-btn', 'click', funToss);
   on('save-setup', 'click', saveTeamSetup);
   on('tossButton', 'click', performToss);
   on('endInnings1', 'click', endInnings1);
   on('startChase', 'click', startSecondInningsFromTarget);
   on('endMatch', 'click', endMatch);
-  on('restart', 'click', () => location.reload());
+  on('restart', 'click', () => { localStorage.clear(); location.reload(); });
 
-  // Bat / bowl buttons (later dynamically updated)
-  const batbowlButtons = document.querySelectorAll('#bat-bowl-section button');
-  batbowlButtons.forEach((b) =>
-    b.addEventListener('click', () => selectBatBowl(b.dataset.decision))
-  );
+  on('undo1', 'click', () => undoLastBall(1));
+  on('undo2', 'click', () => undoLastBall(2));
+  on('showOvers1', 'click', () => showRecentOvers(1));
+  on('showOvers2', 'click', () => showRecentOvers(2));
+  on('proceedInnings2', 'click', proceedToInnings2);
 
-  // Toss caller
-  populateTossCaller();
-
-  // Score buttons Innings 1
-  document.querySelectorAll('#page-innings1 .button-grid button').forEach((btn) => {
-    btn.addEventListener('click', () => handleInnings1Button(btn.dataset));
+  document.addEventListener('click', (e) => {
+    if (e.target.matches('#page-innings1 .button-grid button')) {
+      handleInnings1Button(e.target.dataset);
+    }
+    if (e.target.matches('#page-innings2 .button-grid button')) {
+      handleInnings2Button(e.target.dataset);
+    }
+    if (e.target.matches('#bat-bowl-section button')) {
+      selectBatBowl(e.target.dataset.decision);
+    }
+  });
+  on('nav-back', 'click', () => {
+    if (currentPageIndex > 0) {
+      const prevId = pageFlow[currentPageIndex - 1];
+      goToPageWithNav(prevId);
+    }
   });
 
-  // Score buttons Innings 2
-  document.querySelectorAll('#page-innings2 .button-grid button').forEach((btn) => {
-    btn.addEventListener('click', () => handleInnings2Button(btn.dataset));
+  on('nav-next', 'click', () => {
+    if (currentPageIndex >= pageFlow.length - 1) return;
+
+    const currentId = pageFlow[currentPageIndex];
+    const nextId = pageFlow[currentPageIndex + 1];
+
+    if (!canNavigateForward(currentId)) {
+      return;
+    }
+
+    goToPageWithNav(nextId);
   });
 
-  // Undo buttons
-  on('undo1', 'click', undoLastBall);
-  on('undo2', 'click', undoLastBall2);
+  on('start-setup', 'click', () => goToPageWithNav('page-team-setup'));
+  on('goto-target', 'click', () => goToPageWithNav('page-target-mode'));
 
-  // Initialize displays
-  updateInnings1Display();
-  updateInnings2Display();
+  on('save-setup', 'click', saveTeamSetup);
+  on('tossButton', 'click', performToss);
+  on('endInnings1', 'click', endInnings1);
+  on('startChase', 'click', startSecondInningsFromTarget);
+  on('endMatch', 'click', endMatch);
+  on('restart', 'click', () => { localStorage.clear(); location.reload(); });
+
+  goToPageWithNav('page-landing');
+  localStorage.removeItem('innings1Complete');
+  goToPage('page-landing');
+  localStorage.removeItem('innings1Complete');
 });
 
-/* ---------------------------------------------------------
-   TEAM SETUP
---------------------------------------------------------- */
 function saveTeamSetup() {
-  const teamAName = $('teamAName').value.trim();
-  const teamBName = $('teamBName').value.trim();
-  const overs = parseInt($('oversPerInnings').value, 10) || 10;
-  const playersA = parseInt($('teamAPlayers').value, 10) || 11;
-  const playersB = parseInt($('teamBPlayers').value, 10) || 11;
-  const err = $('team-setup-error');
+  const teamAName = document.getElementById('teamAName').value.trim();
+  const teamBName = document.getElementById('teamBName').value.trim();
+  const overs = parseInt(document.getElementById('oversPerInnings').value, 10) || 20;
+  const playersA = parseInt(document.getElementById('teamAPlayers').value, 10) || 11;
+  const playersB = parseInt(document.getElementById('teamBPlayers').value, 10) || 11;
 
-  err.textContent = '';
-
+  const err = document.getElementById('team-setup-error');
   if (!teamAName || !teamBName) {
-    err.textContent = 'Both team names are required.';
+    if (err) err.textContent = 'Both team names are required.';
     return;
   }
 
-  state.oversPerInnings = overs;
-  state.teamA = teamAName;
-  state.teamB = teamBName;
-  state.playersA = playersA;
-  state.playersB = playersB;
+  state.teamA = teamAName; state.teamB = teamBName;
+  state.oversPerInnings = overs; state.playersA = playersA; state.playersB = playersB;
 
-  localStorage.setItem('oversPerInnings', overs);
   localStorage.setItem('teamA', teamAName);
   localStorage.setItem('teamB', teamBName);
-  localStorage.setItem('playersA', playersA);
-  localStorage.setItem('playersB', playersB);
+  localStorage.setItem('oversPerInnings', overs);
 
   populateTossCaller();
   goToPage('page-toss');
 }
 
 function populateTossCaller() {
-  const select = $('tossCaller');
+  const select = document.getElementById('tossCaller');
   if (!select) return;
-
   select.innerHTML = '';
 
   if (state.teamA) {
     const opt = document.createElement('option');
-    opt.value = 'A';
-    opt.textContent = state.teamA;
+    opt.value = 'A'; opt.textContent = state.teamA;
     select.appendChild(opt);
   }
-
   if (state.teamB) {
     const opt = document.createElement('option');
-    opt.value = 'B';
-    opt.textContent = state.teamB;
+    opt.value = 'B'; opt.textContent = state.teamB;
     select.appendChild(opt);
   }
-
-  validateTeamsBeforeToss();
 }
 
-function validateTeamsBeforeToss() {
-  const err = $('toss-error');
-  const btn = $('tossButton');
+function performToss() {
+  const tossBtn = document.getElementById('tossButton');
+  if (!tossBtn) return;
+  tossBtn.disabled = true;
 
-  if (!err || !btn) return;
+  const callerKey = document.getElementById('tossCaller').value;
+  const callerName = callerKey === 'A' ? state.teamA : state.teamB;
+  const opponentName = callerKey === 'A' ? state.teamB : state.teamA;
+  const callerChoice = document.getElementById('tossChoice').value.toLowerCase();
 
-  if (!state.teamA || !state.teamB) {
-    err.innerText = '❗ Please enter both team names before proceeding to toss.';
-    btn.disabled = true;
+  const coin = document.getElementById('coin');
+  const resultBox = document.getElementById('toss-result');
+  const batBowlSection = document.getElementById('bat-bowl-section');
+
+  resultBox.textContent = 'Flipping coin...';
+  batBowlSection.style.display = 'none';
+
+  coin.classList.remove('heads', 'tails', 'flipping');
+  coin.textContent = '₹';
+
+  void coin.offsetWidth;
+  coin.classList.add('flipping');
+
+  setTimeout(() => {
+    coin.classList.remove('flipping');
+
+    const flipResult = Math.random() < 0.5 ? 'heads' : 'tails';
+
+    coin.classList.remove('heads', 'tails');
+    coin.classList.add(flipResult);
+    coin.textContent = '₹';
+
+    const winner = flipResult === callerChoice ? callerName : opponentName;
+    state.tossWinner = winner;
+
+    resultBox.innerHTML = `<strong>${winner}</strong> won the toss (${flipResult.toUpperCase()})!`;
+    batBowlSection.style.display = 'block';
+    tossBtn.disabled = false;
+  }, 1100);
+}
+
+
+function selectBatBowl(decision) {
+  const winner = state.tossWinner;
+  if (!winner) return;
+
+  if (decision === 'bat') {
+    document.getElementById('innings1-title').textContent = `First Innings - ${winner}`;
   } else {
-    err.innerText = '';
-    btn.disabled = false;
+    document.getElementById('innings1-title').textContent = `First Innings - ${winner === state.teamA ? state.teamB : state.teamA}`;
   }
+
+  goToPage('page-innings1');
+  updateInnings1Display();
 }
 
-/* ---------------------------------------------------------
-   HELPERS: record events & render history
---------------------------------------------------------- */
-function recordEvent(inning, token, runs = 0, isLegalBall = false, wicket = false) {
-  const overList = inning === 1 ? state.overSummaries1 : state.overSummaries2;
+function recordEvent(innings, token, runs = 0, isLegalBall = false, wicket = false) {
+  const overList = innings === 1 ? state.overSummaries1 : state.overSummaries2;
+  const history = innings === 1 ? state.ballHistory1 : state.ballHistory2;
+
+  history.push({ type: token, runs, wicket, isLegalBall });
+
   const cur = overList[overList.length - 1];
   cur.events.push(token);
   cur.runs += runs;
   if (wicket) cur.wickets++;
   if (isLegalBall) cur.balls++;
-  // If over finished (6 legal balls) start a new over
+
   if (cur.balls >= 6) {
     overList.push({ runs: 0, wickets: 0, balls: 0, events: [] });
   }
-  updateHistoryDisplay(inning);
+
+  updateHistoryDisplay(innings);
 }
 
-function formatEventToken(token) {
-  // token is simple string: '●1','●2','4','^','W','WD','NB'
-  // you can render custom styling via CSS later; currently return token
-  return token;
+function undoLastBall(innings) {
+  const history = innings === 1 ? state.ballHistory1 : state.ballHistory2;
+  if (!history.length) return;
+
+  const last = history[history.length - 1];
+  let msg = `<p>You are about to undo: <strong>${last.type}</strong></p>`;
+  if (last.runs) msg += `<p>Runs: <strong>${last.runs}</strong></p>`;
+  if (last.wicket) msg += `<p>Wickets: <strong>1</strong></p>`;
+  msg += `<p class="small text-muted mb-0">This will update score, balls and over history.</p>`;
+
+  showUndoModal(msg, () => {
+    history.pop();
+    if (innings === 1) {
+      state.runs1 -= last.runs || 0;
+      if (last.wicket) state.wickets1--;
+      if (last.isLegalBall) state.balls1--;
+      rebuildOverSummaries(1);
+      updateInnings1Display();
+    } else {
+      state.runs2 -= last.runs || 0;
+      if (last.wicket) state.wickets2--;
+      if (last.isLegalBall) state.balls2--;
+      rebuildOverSummaries(2);
+      updateInnings2Display();
+    }
+  });
+}
+function rebuildOverSummaries(innings) {
+  const overList = innings === 1 ? state.overSummaries1 : state.overSummaries2;
+  const history = innings === 1 ? state.ballHistory1 : state.ballHistory2;
+
+  overList.length = 0;
+  overList.push({ runs: 0, wickets: 0, balls: 0, events: [] });
+
+  history.forEach(ev => {
+    const cur = overList[overList.length - 1];
+    cur.events.push(ev.type);
+    cur.runs += ev.runs || 0;
+    if (ev.wicket) cur.wickets++;
+    if (ev.isLegalBall) cur.balls++;
+    if (cur.balls >= 6) {
+      overList.push({ runs: 0, wickets: 0, balls: 0, events: [] });
+    }
+  });
 }
 
-function updateHistoryDisplay(inning) {
-  const id = inning === 1 ? 'innings1-history' : 'innings2-history';
-  const el = $(id);
+function getBallHTML(token) {
+  const classes = {
+    '6': 'ball-six',
+    '4': 'ball-four',
+    '3': 'ball-run',
+    '2': 'ball-run',
+    '1': 'ball-run',
+    '0': 'ball-dot',
+    'W': 'ball-wicket',
+    'WD': 'ball-wide',
+    'NB': 'ball-noball'
+  };
+  const cls = classes[token] || 'ball-run';
+  return `<span class="ball-circle ${cls}">${token}</span>`;
+}
+
+function updateHistoryDisplay(innings) {
+  const containerId = innings === 1 ? 'innings1-history' : 'innings2-history';
+  const el = document.getElementById(containerId);
   if (!el) return;
-  const overList = inning === 1 ? state.overSummaries1 : state.overSummaries2;
-  // exclude last empty over if it has zero events
-  const effective = overList.filter(o => o.events && o.events.length > 0);
-  const last3 = effective.slice(-3);
-  const rendered = last3.map(o => o.events.map(formatEventToken).join(' ')).join('  |  ');
-  el.innerText = rendered || '';
-}
 
-/* ---------------------------------------------------------
-   COIN TOSS
---------------------------------------------------------- */
-function performToss() {
-  validateTeamsBeforeToss();
-
-  const tossBtn = $('tossButton');
-  if (!tossBtn || tossBtn.disabled) return;
-
-  const callerKey = $('tossCaller').value;
-  const callerName = callerKey === 'A' ? state.teamA : state.teamB;
-  const opponentName = callerKey === 'A' ? state.teamB : state.teamA;
-  const callerChoice = ($('tossChoice').value || 'heads').toLowerCase();
-
-  const coin = $('coin');
-  const resultBox = $('toss-result');
-  const batBowlSection = $('bat-bowl-section');
-  tossBtn.disabled = true;
-  resultBox.textContent = '';
-  batBowlSection.style.display = 'none';
-  coin.classList.remove('heads', 'tails');
-  coin.classList.add('flipping');
-  coin.textContent = 'FLIPPING';
-
-  setTimeout(() => {
-      coin.classList.remove('flipping');
-
-      const flipResult = Math.random() < 0.5 ? 'heads' : 'tails';
-
-      // Add class for styling
-      coin.classList.add(flipResult);
-
-      // SET THE TEXT ON THE COIN
-      coin.textContent = flipResult.toUpperCase();
-
-      const winner = (flipResult === callerChoice) ? callerName : opponentName;
-
-      // Save toss winner into state so bat/bowl buttons can access it
-      state.tossWinner = winner;
-
-      resultBox.innerHTML = `<b>${winner}</b> won the toss (${flipResult}).`;
-
-      batBowlSection.style.display = 'block';
-      tossBtn.disabled = false;
-
-  }, 1000);
-}
-
-function selectBatBowl(decision, tossWinnerName) {
-  // Use provided tossWinnerName if passed, otherwise fall back to state.tossWinner
-  const winner = tossWinnerName || state.tossWinner;
-
-  if (!winner) return;
-
-  if (decision === 'bat') {
-    localStorage.setItem('battingTeam', winner);
-    localStorage.setItem('bowlingTeam', winner === state.teamA ? state.teamB : state.teamA);
-  } else {
-    localStorage.setItem('bowlingTeam', winner);
-    localStorage.setItem('battingTeam', winner === state.teamA ? state.teamB : state.teamA);
+  const overList = innings === 1 ? state.overSummaries1 : state.overSummaries2;
+  if (!overList.length) {
+    el.innerHTML = '<div class="text-muted text-center small">No balls bowled yet</div>';
+    return;
   }
-  goToPage('page-innings1');
-  updateInnings1Display();
+  const nonEmpty = overList.filter(o => o.events && o.events.length > 0);
+  if (!nonEmpty.length) {
+    el.innerHTML = '<div class="text-muted text-center small">No balls bowled yet</div>';
+    return;
+  }
+  const currentOver = nonEmpty[nonEmpty.length - 1];
+  const overNum = nonEmpty.length; // 1-based index for current over
+
+  let html = `
+    <div class="text-center text-muted mb-1 small">
+      Current Over: ${overNum} (Runs: ${currentOver.runs}, Wkts: ${currentOver.wickets})
+    </div>
+    <div class="text-center">
+      ${currentOver.events.map(getBallHTML).join('')}
+    </div>
+  `;
+  el.innerHTML = html;
 }
-/* ---------------------------------------------------------
-   INNINGS 1
---------------------------------------------------------- */
+
+function showRecentOvers(innings) {
+  const modalId = innings === 1 ? 'innings1RecentModal' : 'innings2RecentModal';
+  const contentId = innings === 1 ? 'innings1RecentContent' : 'innings2RecentContent';
+  const modalEl = document.getElementById(modalId);
+
+  if (!modalEl) {
+    alert('Recent overs modal not available');
+    return;
+  }
+  const overList = innings === 1 ? state.overSummaries1 : state.overSummaries2;
+  const effective = overList.filter(o => o.events.length > 0);
+  let html = '';
+  effective.forEach((over, idx) => {
+    html += `<div class="mb-3 p-3 border rounded">
+      <h6>Over ${idx + 1}: ${over.runs} runs, ${over.wickets} wkts (${over.balls}/6)</h6>
+      <div class="d-flex flex-wrap">${over.events.map(getBallHTML).join('')}</div>
+    </div>`;
+  });
+  document.getElementById(contentId).innerHTML = html || 'No overs completed yet';
+  new bootstrap.Modal(modalEl).show();
+}
+function updateDisplay(innings) {
+  if (innings === 1) updateInnings1Display();
+  else updateInnings2Display();
+  updateHistoryDisplay(innings);
+}
 function handleInnings1Button(dataset) {
-  if (dataset.run) return scoreRun(parseInt(dataset.run, 10));
-  if (dataset.boundary) return scoreBoundary(parseInt(dataset.boundary, 10));
-  if (dataset.extra) return dataset.extra === 'wide' ? addWide() : addNoBall();
-  if (dataset.wicket) return addWicket();
+  if (dataset.run !== undefined) {
+    const runs = parseInt(dataset.run, 10);
+    state.runs1 += runs;
+    state.balls1++;
+    recordEvent(1, runs.toString(), runs, true, false);
+    if (runs === 6) celebrate(1, 'SIX!');
+    updateInnings1Display();
+  } else if (dataset.boundary !== undefined) {
+    const runs = parseInt(dataset.boundary, 10);
+    state.runs1 += runs;
+    state.balls1++;
+    const token = runs === 6 ? '6' : '4';
+    recordEvent(1, token, runs, true, false);
+    celebrate(1, runs === 6 ? 'SIX!' : 'FOUR!');
+    updateInnings1Display();
+  } else if (dataset.extra === 'wide') {
+    state.runs1++;
+    recordEvent(1, 'WD', 1, false, false);
+    updateInnings1Display();
+  } else if (dataset.extra === 'noball') {
+    state.runs1++;
+    recordEvent(1, 'NB', 1, false, false);
+    updateInnings1Display();
+  } else if (dataset.wicket !== undefined) {
+    state.wickets1++;
+    state.balls1++;
+    recordEvent(1, 'W', 0, true, true);
+    celebrate(1, 'WICKET!');
+    updateInnings1Display();
+  }
 }
 
-function scoreRun(r) {
+function scoreRun(innings, r) {
   state.runs1 += r;
   state.balls1++;
-  recordEvent(1, `●${r}`, r, true, false);
-  updateInnings1Display();
+  recordEvent(1, r.toString(), r, true, false);
+  if (r === 6) celebrate(1, '🎉 SIX!');
+  else if (r === 4) celebrate(1, '🎉 FOUR!');
+  updateDisplay(1);
 }
 
-function scoreBoundary(r) {
+function scoreBoundary(innings, r) {
   state.runs1 += r;
   state.balls1++;
-  const token = r === 6 ? '^' : '4';
-  recordEvent(1, token === '^' ? '^' : '4', r, true, false);
-  celebrate(r === 6 ? '🎉 SIX!' : '🔥 FOUR!');
-  updateInnings1Display();
+  const token = r === 6 ? '6' : '4';
+  recordEvent(1, token, r, true, false);
+  celebrate(1, r === 6 ? '🎉 SIX!' : '🎉 FOUR!');
+  updateDisplay(1);
 }
 
-function addWide() {
+function addWide(innings) {
   state.runs1++;
-  // wide does not count as legal ball
   recordEvent(1, 'WD', 1, false, false);
-  updateInnings1Display();
+  updateDisplay(1);
 }
 
-function addNoBall() {
+function addNoBall(innings) {
   state.runs1++;
   recordEvent(1, 'NB', 1, false, false);
-  updateInnings1Display();
+  updateDisplay(1);
 }
 
-function addWicket() {
+function addWicket(innings) {
   state.wickets1++;
   state.balls1++;
   recordEvent(1, 'W', 0, true, true);
-  celebrate('💥 WICKET!');
-  updateInnings1Display();
-}
+  const celebEl = document.getElementById('celebration');
+  if (celebEl) {
+    celebEl.textContent = '💥 WICKET!';
+    celebEl.classList.add('celebrate');
+    setTimeout(() => celebEl.classList.remove('celebrate'), 300);
+  }
 
-function undoLastBall() {
-  if (state.balls1 > 0) state.balls1--;
-  // NOTE: for simplicity this undo does not fully revert per-over array counts precisely.
   updateInnings1Display();
 }
 
 function updateInnings1Display() {
-  const maxOvers = state.oversPerInnings || 10;
-  const maxBalls = maxOvers * 6;
+  const scoreEl = document.getElementById('innings1-score');
+  const oversEl = document.getElementById('innings1-overs');
+  const rrEl = document.getElementById('innings1-rr');
 
-  const scoreEl = $('innings1-score');
-  const oversEl = $('innings1-overs');
-  const rrEl = $('innings1-rr');
+  if (scoreEl) scoreEl.textContent = `${state.runs1}/${state.wickets1}`;
+  if (oversEl) oversEl.textContent = `${Math.floor(state.balls1 / 6)}.${state.balls1 % 6} Overs`;
 
-  if (scoreEl) scoreEl.innerText = `${state.runs1}/${state.wickets1}`;
-  if (oversEl) oversEl.innerText = `${Math.floor(state.balls1 / 6)}.${state.balls1 % 6} / ${maxOvers}`;
+  const rr = state.balls1 === 0 ? 0 : (state.runs1 / (state.balls1 / 6)).toFixed(2);
+  if (rrEl) rrEl.textContent = `RR ${rr}`;
 
-  const rr = state.balls1 > 0 ? (state.runs1 / (state.balls1 / 6)).toFixed(2) : '0.00';
-  if (rrEl) rrEl.innerText = `RR: ${rr}`;
+  const maxBalls = state.oversPerInnings * 6;
+  const maxWickets = Math.max(1, state.playersA);
 
-  updateHistoryDisplay(1);
-
-  // End innings if overs finished or all out
-  const maxWickets = Math.max(1, state.playersA - 1);
-  if (!state.innings1Ended && (state.balls1 >= maxBalls || state.wickets1 >= maxWickets)) {
-    state.innings1Ended = true;
-    endInnings1();
+  if (!state.innings1Ended) {
+    if (state.balls1 >= maxBalls) {
+      state.innings1Ended = true;
+      showInningsEndModal(
+        'Innings Break',
+        `${state.teamA}: ${state.runs1}/${state.wickets1}<br>Overs completed: ${state.oversPerInnings}`,
+        '🕒'
+      );
+    } else if (state.wickets1 >= maxWickets) {
+      state.innings1Ended = true;
+      showInningsEndModal(
+        'All Out',
+        `${state.teamA}: ${state.runs1}/${state.wickets1}`,
+        '🏏'
+      );
+    }
   }
+  updateHistoryDisplay(1);
 }
 
 function endInnings1() {
-  // Build per-over summary HTML
-  localStorage.setItem('score1', state.runs1);
-  localStorage.setItem('score1_balls', state.balls1);
+  const stats = `
+    <strong>${state.teamA}</strong>: ${state.runs1}/${state.wickets1}<br>
+    ${Math.floor(state.balls1 / 6)}.${state.balls1 % 6} overs | RR ${(state.runs1 / (state.balls1 / 6)).toFixed(2)}
+  `;
 
-  const summaryEl = $('innings1-summary');
-  if (summaryEl) {
-    const effective = state.overSummaries1.filter(o => o.events && o.events.length > 0);
-    let html = `<h4>First Innings - Over by Over</h4><div class="small">`;
-    effective.forEach((o, idx) => {
-      html += `<div>Over ${idx + 1}: Runs ${o.runs} &nbsp; Wickets ${o.wickets} &nbsp; (${o.events.join(' ')})</div>`;
-    });
-    html += `</div>`;
-    html += `<div class="mt-2"><b>Total:</b> ${state.runs1}/${state.wickets1} in ${Math.floor(state.balls1/6)}.${state.balls1%6} overs</div>`;
-    html += `<div class="mt-3"><button id="proceedSecond" class="btn btn-success">Proceed to Second Innings</button></div>`;
-    summaryEl.innerHTML = html;
+  document.getElementById('innings1-stats').innerHTML = stats;
+  const modal = new bootstrap.Modal(document.getElementById('innings1Modal'));
+  modal.show();
 
-    // Prefill input targetScore with automatic target (runs + 1)
-    const targetInput = $('targetScore');
-    if (targetInput) targetInput.value = state.runs1 + 1;
-
-    // Bind the proceed button to start second innings using the auto target
-    const proceedBtn = $('proceedSecond');
-    if (proceedBtn) {
-      proceedBtn.addEventListener('click', () => {
-        // use input if user edited it, otherwise default to state.runs1 + 1
-        const tVal = parseInt($('targetScore').value, 10);
-        state.target = isNaN(tVal) ? (state.runs1 + 1) : tVal;
-        goToPage('page-innings2');
-        updateInnings2Display();
-      });
-    }
-  }
-
-  goToPage('page-target-mode');
+  localStorage.setItem('innings1Complete', JSON.stringify({
+    runs: state.runs1, wickets: state.wickets1, balls: state.balls1, team: state.teamA
+  }));
 }
+function showInningsEndModal(title, message, emoji) {
+  const body = document.getElementById('innings1-stats');
+  if (!body) return;
 
-/* ---------------------------------------------------------
-   INNINGS 2
---------------------------------------------------------- */
-function startSecondInningsFromTarget() {
-  // If user provided a target, use it; otherwise default to first innings + 1
-  const t = parseInt($('targetScore').value, 10);
-  state.target = isNaN(t) ? (state.runs1 + 1) : t;
+  const overs = `${Math.floor(state.balls1 / 6)}.${state.balls1 % 6}`;
+  const rr = state.balls1 === 0 ? 0 : (state.runs1 / (state.balls1 / 6)).toFixed(2);
+
+  body.innerHTML = `
+    <div class="text-center">
+      <div class="display-4 mb-2">${emoji}</div>
+      <h4 class="mb-2">${title}</h4>
+      <div class="mb-2">${message}</div>
+      <hr>
+      <div class="small text-muted">Overs: ${overs} &nbsp; | &nbsp; RR: ${rr}</div>
+    </div>
+  `;
+
+  const modal = new bootstrap.Modal(document.getElementById('innings1Modal'));
+  modal.show();
+
+  localStorage.setItem('innings1Complete', JSON.stringify({
+    runs: state.runs1, wickets: state.wickets1, balls: state.balls1, team: state.teamA
+  }));
+}
+function proceedToInnings2() {
+  const innings1Data = JSON.parse(localStorage.getItem('innings1Complete') || '{}');
+  state.target = (innings1Data.runs || state.runs1) + 1;
+
+  const targetInput = document.getElementById('targetScore');
+  if (targetInput) targetInput.value = state.target;
+
+  const modal = bootstrap.Modal.getInstance(document.getElementById('innings1Modal'));
+  if (modal) modal.hide();
+
+  state.runs2 = 0;
+  state.wickets2 = 0;
+  state.balls2 = 0;
+  state.overSummaries2 = [{ runs: 0, wickets: 0, balls: 0, events: [] }];
+  state.ballHistory2 = [];
+
   goToPage('page-innings2');
   updateInnings2Display();
 }
 
+function startSecondInningsFromTarget() {
+  const tInput = document.getElementById('targetScore');
+  const oInput = document.getElementById('targetOvers');
+  const wInput = document.getElementById('targetWickets');
+
+  const tVal = tInput ? tInput.value.trim() : '';
+  const oVal = oInput ? oInput.value.trim() : '';
+  const wVal = wInput ? wInput.value.trim() : '';
+
+  const errorBoxId = 'target-error';
+  let errEl = document.getElementById(errorBoxId);
+  if (!errEl) {
+    errEl = document.createElement('div');
+    errEl.id = errorBoxId;
+    errEl.className = 'error mt-2';
+    const page = document.getElementById('page-target-mode');
+    if (page) page.insertBefore(errEl, page.firstChild.nextSibling);
+  }
+
+  if (!tVal || !oVal || !wVal) {
+    errEl.textContent = 'Please fill Target Score, Max Overs and Available Wickets before starting 2nd innings.';
+    return;
+  }
+
+  const t = parseInt(tVal, 10);
+  const o = parseInt(oVal, 10);
+  const w = parseInt(wVal, 10);
+
+  if (isNaN(t) || t <= 0 || isNaN(o) || o <= 0 || isNaN(w) || w <= 0) {
+    errEl.textContent = 'All values must be positive numbers.';
+    return;
+  }
+  errEl.textContent = '';
+  state.target = t;
+  state.oversPerInnings = o;
+  state.playersB = w + 1;
+  state.runs2 = 0;
+  state.wickets2 = 0;
+  state.balls2 = 0;
+  state.overSummaries2 = [{ runs: 0, wickets: 0, balls: 0, events: [] }];
+  state.ballHistory2 = [];
+  const title2 = document.getElementById('innings2-title');
+  if (title2 && state.teamB) {
+    title2.textContent = `Second Innings - ${state.teamB}`;
+  }
+
+  goToPage('page-innings2');
+  updateInnings2Display();
+}
+
+
 function handleInnings2Button(dataset) {
-  if (dataset.run2) return scoreRun2(parseInt(dataset.run2, 10));
-  if (dataset.boundary2) return scoreBoundary2(parseInt(dataset.boundary2, 10));
-  if (dataset.extra2) return dataset.extra2 === 'wide' ? addWide2() : addNoBall2();
-  if (dataset.wicket2) return addWicket2();
-}
-
-function scoreRun2(r) {
-  state.runs2 += r;
-  state.balls2++;
-  recordEvent(2, `●${r}`, r, true, false);
-  updateInnings2Display();
-}
-
-function scoreBoundary2(r) {
-  state.runs2 += r;
-  state.balls2++;
-  const token = r === 6 ? '^' : '4';
-  recordEvent(2, token === '^' ? '^' : '4', r, true, false);
-  celebrate2(r === 6 ? '🎉 SIX!' : '🔥 FOUR!');
-  updateInnings2Display();
-}
-
-function addWide2() {
-  state.runs2++;
-  recordEvent(2, 'WD', 1, false, false);
-  updateInnings2Display();
-}
-
-function addNoBall2() {
-  state.runs2++;
-  recordEvent(2, 'NB', 1, false, false);
-  updateInnings2Display();
-}
-
-function addWicket2() {
-  state.wickets2++;
-  state.balls2++;
-  recordEvent(2, 'W', 0, true, true);
-  celebrate2('💥 WICKET!');
-  updateInnings2Display();
-}
-
-function undoLastBall2() {
-  if (state.balls2 > 0) state.balls2--;
-  updateInnings2Display();
+  if (dataset.run2 !== undefined) {
+    const r = parseInt(dataset.run2, 10);
+    state.runs2 += r;
+    state.balls2++;
+    recordEvent(2, r.toString(), r, true, false);
+    if (r === 6) celebrate(2, 'SIX!');
+    else if (r === 4) celebrate(2, 'FOUR!');
+    updateInnings2Display();
+  } else if (dataset.boundary2 !== undefined) {
+    const r = parseInt(dataset.boundary2, 10);
+    state.runs2 += r;
+    state.balls2++;
+    const token = r === 6 ? '6' : '4';
+    recordEvent(2, token, r, true, false);
+    celebrate(2, r === 6 ? 'SIX!' : 'FOUR!');
+    updateInnings2Display();
+  } else if (dataset.extra2 === 'wide') {
+    state.runs2++;
+    recordEvent(2, 'WD', 1, false, false);
+    updateInnings2Display();
+  } else if (dataset.extra2 === 'noball') {
+    state.runs2++;
+    recordEvent(2, 'NB', 1, false, false);
+    updateInnings2Display();
+  } else if (dataset.wicket2 !== undefined) {
+    state.wickets2++;
+    state.balls2++;
+    recordEvent(2, 'W', 0, true, true);
+    celebrate(2, 'WICKET!');
+    updateInnings2Display();
+  }
 }
 
 function updateInnings2Display() {
-  const scoreEl = $('innings2-score');
-  const oversEl = $('innings2-overs');
-  const rrrEl = $('innings2-rrr');
-  const neededEl = $('innings2-needed');
+  const scoreEl = document.getElementById('innings2-score');
+  const oversEl = document.getElementById('innings2-overs');
+  const rrrEl = document.getElementById('innings2-rrr');
+  const neededEl = document.getElementById('innings2-needed');
 
-  if (scoreEl) scoreEl.innerText = `${state.runs2}/${state.wickets2}`;
-  if (oversEl) oversEl.innerText = `${Math.floor(state.balls2 / 6)}.${state.balls2 % 6}`;
+  if (scoreEl) scoreEl.textContent = `${state.runs2}/${state.wickets2}`;
+  if (oversEl) oversEl.textContent = `${Math.floor(state.balls2 / 6)}.${state.balls2 % 6} Overs`;
 
-  const needed = Math.max(0, state.target - state.runs2);
-  if (neededEl) neededEl.innerText = `Runs Needed: ${needed}`;
+  const target = state.target || 0;
+  const needed = Math.max(0, target - state.runs2);
+  if (neededEl) neededEl.textContent = `Runs Needed: ${needed}`;
 
-  const remainingOvers = Math.max(0, state.oversPerInnings - state.balls2 / 6);
-  const rrr = remainingOvers > 0 ? (needed / remainingOvers).toFixed(2) : '0.00';
-  if (rrrEl) rrrEl.innerText = `RRR: ${rrr}`;
+  const oversBowled = state.balls2 / 6;
+  const oversRemaining = Math.max(0, state.oversPerInnings - oversBowled);
+  const rrr = oversRemaining <= 0 || needed <= 0
+    ? 0
+    : (needed / oversRemaining).toFixed(2);
+  if (rrrEl) rrrEl.textContent = `RRR ${rrr}`;
 
   updateHistoryDisplay(2);
 
-  // End match if target reached or overs exhausted or all out
-  const maxOvers = state.oversPerInnings || 10;
-  const maxBalls = maxOvers * 6;
-  const maxWickets = Math.max(1, state.playersB - 1);
-
-  if (state.target > 0 && state.runs2 >= state.target) {
-    endMatch();
-  } else if (state.balls2 >= maxBalls || state.wickets2 >= maxWickets) {
-    endMatch();
+  const maxBalls = state.oversPerInnings * 6;
+  const maxWickets = Math.max(1, state.playersB);
+  if (state.balls2 > 0 || state.wickets2 > 0) {
+    if (needed <= 0) {
+      showInnings2ResultModal('Chase Completed');
+    } else if (state.balls2 >= maxBalls || state.wickets2 >= maxWickets) {
+      showInnings2ResultModal('Innings Complete');
+    }
   }
 }
 
-/* ---------------------------------------------------------
-   CELEBRATION
---------------------------------------------------------- */
-function celebrate(text) {
-  const el = $('celebration');
-  if (!el) return;
-  el.innerText = text;
-  el.classList.add('celebrate');
-  setTimeout(() => el.classList.remove('celebrate'), 600);
+function scoreRun(innings, r) {
+  state.runs2 += r;
+  state.balls2++;
+  recordEvent(2, r.toString(), r, true, false);
+  if (r === 6) celebrate(2, '🎉 SIX!');
+  else if (r === 4) celebrate(2, '🎉 FOUR!');
+  updateDisplay(2);
 }
 
-function celebrate2(text) {
-  const el = $('celebration2');
-  if (!el) return;
-  el.innerText = text;
-  el.classList.add('celebrate');
-  setTimeout(() => el.classList.remove('celebrate'), 600);
+function scoreBoundary(innings, r) {
+  state.runs2 += r;
+  state.balls2++;
+  const token = r === 6 ? '6' : '4';
+  recordEvent(2, token, r, true, false);
+  celebrate(2, r === 6 ? '🎉 SIX!' : '🎉 FOUR!');
+  updateDisplay(2);
 }
 
-/* ---------------------------------------------------------
-   MATCH END
---------------------------------------------------------- */
+function addWide(innings) {
+  state.runs2++;
+  recordEvent(2, 'WD', 1, false, false);
+  updateDisplay(2);
+}
+
+function addNoBall(innings) {
+  state.runs2++;
+  recordEvent(2, 'NB', 1, false, false);
+  updateDisplay(2);
+}
+
+function addWicket(innings) {
+  state.wickets1++;  // Increment FIRST
+  state.balls1++;
+  recordEvent(1, 'W', 0, true, true);
+  const celebEl = document.getElementById('celebration');
+  if (celebEl) {
+    celebEl.textContent = '💥 WICKET!';
+    celebEl.classList.add('celebrate');
+    setTimeout(() => celebEl.classList.remove('celebrate'), 300);
+  }
+
+  updateInnings1Display(); // Updates instantly
+}
+
 function endMatch() {
-  const winner =
-    state.runs2 >= state.target ? 'Chasing Team Wins!' : 'Defending Team Wins!';
-
-  $('summary-content').innerText = winner;
-
-  // optionally include last over summaries in summary-content
-  let details = '\n\nFirst Innings:\n';
-  state.overSummaries1.filter(o => o.events.length).forEach((o, i) => {
-    details += `Over ${i+1}: ${o.runs} runs, ${o.wickets} wkts (${o.events.join(' ')})\n`;
-  });
-  details += `\nSecond Innings:\n`;
-  state.overSummaries2.filter(o => o.events.length).forEach((o, i) => {
-    details += `Over ${i+1}: ${o.runs} runs, ${o.wickets} wkts (${o.events.join(' ')})\n`;
-  });
-
-  // append details as preformatted text
-  const pre = document.createElement('pre');
-  pre.className = 'small mt-2';
-  pre.style.whiteSpace = 'pre-wrap';
-  pre.innerText = details;
-  const summaryContent = $('summary-content');
-  if (summaryContent) {
-    summaryContent.innerHTML = '';
-    summaryContent.appendChild(document.createTextNode(winner));
-    summaryContent.appendChild(pre);
+  const summaryContent = document.getElementById('summary-content');
+  if (!summaryContent) {
+    goToPage('page-summary');
+    return;
   }
+  const innings1Data = JSON.parse(localStorage.getItem('innings1Complete') || '{}');
+  const runs1 = innings1Data.runs ?? state.runs1;
+  const wickets1 = innings1Data.wickets ?? state.wickets1;
+  const balls1 = innings1Data.balls ?? state.balls1;
+  const overs1 = `${Math.floor((balls1 || 0) / 6)}.${(balls1 || 0) % 6}`;
+
+  const runs2 = state.runs2;
+  const wickets2 = state.wickets2;
+  const overs2 = `${Math.floor(state.balls2 / 6)}.${state.balls2 % 6}`;
+
+  let resultText;
+  if (runs2 >= state.target) {
+    const wktsInHand = (state.playersB - 1) - wickets2;
+    resultText = `${state.teamB} won by ${wktsInHand} wicket(s).`;
+  } else {
+    const margin = state.target - runs2;
+    resultText = `${state.teamA} won by ${margin} run(s).`;
+  }
+
+  const inn1Overs = state.overSummaries1.filter(o => o.events && o.events.length);
+  const inn2Overs = state.overSummaries2.filter(o => o.events && o.events.length);
+
+  let html = `
+    <h3 class="text-center mb-3">${resultText}</h3>
+    <div class="row text-center mb-3">
+      <div class="col-md-6">
+        <h5>${state.teamA}</h5>
+        <div class="fs-4">${runs1}/${wickets1}</div>
+        <small>${overs1} overs</small>
+      </div>
+      <div class="col-md-6">
+        <h5>${state.teamB}</h5>
+        <div class="fs-4">${runs2}/${wickets2}</div>
+        <small>${overs2} overs (Target ${state.target})</small>
+      </div>
+    </div>
+    <hr>
+    <h5>${state.teamA} - Over by Over</h5>
+  `;
+
+  inn1Overs.forEach((o, i) => {
+    html += `
+      <div class="mb-1 small">
+        <strong>Over ${i + 1}:</strong> ${o.runs} runs, ${o.wickets} wkts &nbsp;
+        ${o.events.map(getBallHTML).join(' ')}
+      </div>
+    `;
+  });
+
+  html += `<hr><h5>${state.teamB} - Over by Over</h5>`;
+
+  inn2Overs.forEach((o, i) => {
+    html += `
+      <div class="mb-1 small">
+        <strong>Over ${i + 1}:</strong> ${o.runs} runs, ${o.wickets} wkts &nbsp;
+        ${o.events.map(getBallHTML).join(' ')}
+      </div>
+    `;
+  });
+  summaryContent.innerHTML = html;
   goToPage('page-summary');
 }
+
+
+function showInningsEndModal(title, message, emoji) {
+  document.getElementById('innings1-stats').innerHTML = `
+    <div class="text-center">
+      <div class="display-4 mb-3">${emoji}</div>
+      <h4 class="text-primary mb-3">${title}</h4>
+      <div class="fs-5">${message}</div>
+      <hr>
+      <div>${Math.floor(state.balls1 / 6)}.${state.balls1 % 6} overs | RR ${(state.runs1 / (state.balls1 / 6)).toFixed(2)}</div>
+    </div>
+  `;
+  new bootstrap.Modal(document.getElementById('innings1Modal')).show();
+}
+
+function celebrate(innings, text) {
+  const overlay = document.getElementById('celebration-overlay');
+  const content = document.getElementById('celebration-text');
+  if (!overlay || !content) return;
+  content.textContent = text;
+  overlay.style.display = 'flex';
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    content.textContent = '';
+  }, 900);
+}
+
+
+function showUndoModal(message, onConfirm) {
+  const bodyEl = document.getElementById('undoModal-body');
+  const confirmBtn = document.getElementById('undoModal-confirm');
+  const modalEl = document.getElementById('undoModal');
+  if (!bodyEl || !confirmBtn || !modalEl) return;
+
+  bodyEl.innerHTML = message;
+
+  const handler = () => {
+    confirmBtn.removeEventListener('click', handler);
+    const inst = bootstrap.Modal.getInstance(modalEl);
+    if (inst) inst.hide();
+    if (typeof onConfirm === 'function') onConfirm();
+  };
+  confirmBtn.addEventListener('click', handler);
+
+  const modal = new bootstrap.Modal(modalEl);
+  modal.show();
+}
+
+function showInnings2ResultModal(title) {
+  const body = document.getElementById('innings2-stats');
+  if (!body) return;
+
+  const overs2 = `${Math.floor(state.balls2 / 6)}.${state.balls2 % 6}`;
+  const rr2 = state.balls2 === 0 ? 0 : (state.runs2 / (state.balls2 / 6)).toFixed(2);
+
+  const innings1Data = JSON.parse(localStorage.getItem('innings1Complete') || '{}');
+  const runs1 = innings1Data.runs ?? state.runs1;
+  const wickets1 = innings1Data.wickets ?? state.wickets1;
+  const balls1 = innings1Data.balls ?? state.balls1;
+  const overs1 = `${Math.floor((balls1 || 0) / 6)}.${(balls1 || 0) % 6}`;
+  const rr1 = balls1 ? (runs1 / (balls1 / 6)).toFixed(2) : '0.00';
+
+  let resultText;
+  if (state.runs2 >= state.target) {
+    const wktsInHand = (state.playersB - 1) - state.wickets2;
+    resultText = `${state.teamB} won by ${wktsInHand} wicket(s).`;
+  } else {
+    const margin = state.target - state.runs2;
+    resultText = `${state.teamA} won by ${margin} run(s).`;
+  }
+
+  body.innerHTML = `
+    <div class="text-center">
+      <h4 class="mb-2">${title}</h4>
+      <p class="mb-2"><strong>Result:</strong> ${resultText}</p>
+      <hr>
+      <div class="row text-center">
+        <div class="col-6">
+          <h6>${state.teamA}</h6>
+          <div>${runs1}/${wickets1}</div>
+          <small>${overs1} overs, RR ${rr1}</small>
+        </div>
+        <div class="col-6">
+          <h6>${state.teamB}</h6>
+          <div>${state.runs2}/${state.wickets2}</div>
+          <small>${overs2} overs, RR ${rr2}</small>
+        </div>
+      </div>
+      <hr>
+      <div class="small text-muted">Click Proceed to see full over-by-over summary.</div>
+    </div>
+    `;
+  const modal = new bootstrap.Modal(document.getElementById('innings2Modal'));
+  modal.show();
+}
+
+function proceedToSummary() {
+  const modalEl = document.getElementById('innings2Modal');
+  const inst = modalEl ? bootstrap.Modal.getInstance(modalEl) : null;
+  if (inst) inst.hide();
+  endMatch();
+}
+function canNavigateForward(currentId) {
+  const showMsg = (text) => {
+    let el = document.getElementById('global-validation');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'global-validation';
+      el.className = 'error mt-2';
+      const app = document.getElementById('app') || document.body;
+      app.insertBefore(el, app.firstChild);
+    }
+    el.textContent = text;
+    setTimeout(() => { el.textContent = ''; }, 2500);
+  };
+
+  if (currentId === 'page-landing') {
+    return true;
+  }
+
+  if (currentId === 'page-team-setup') {
+    if (!state.teamA || !state.teamB) {
+      showMsg('Please complete team setup before proceeding.');
+      return false;
+    }
+    return true;
+  }
+
+  if (currentId === 'page-toss') {
+    if (!state.tossWinner) {
+      showMsg('Please complete the toss and select bat/bowl before proceeding.');
+      return false;
+    }
+    return true;
+  }
+
+  if (currentId === 'page-innings1') {
+    if (!state.innings1Ended) {
+      showMsg('First innings is not completed yet. End the innings before proceeding.');
+      return false;
+    }
+    return true;
+  }
+
+  if (currentId === 'page-target-mode') {
+    return true;
+  }
+
+  if (currentId === 'page-innings2') {
+    const maxBalls = state.oversPerInnings * 6;
+    const maxWickets = Math.max(1, state.playersB - 1);
+    const targetSet = !!state.target;
+
+    const inningsStarted = state.balls2 > 0 || state.wickets2 > 0;
+    const chaseOver =
+      (targetSet && state.runs2 >= state.target) ||
+      state.balls2 >= maxBalls ||
+      state.wickets2 >= maxWickets;
+
+    if (!inningsStarted) {
+      showMsg('Second innings has not started yet.');
+      return false;
+    }
+    if (!chaseOver) {
+      showMsg('Second innings is still in progress. Complete the innings before going to summary.');
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
+function funToss() {
+  const coin = document.getElementById('fun-coin');
+  const result = document.getElementById('fun-coin-result');
+  const btn = document.getElementById('fun-toss-btn');
+  if (!coin || !result || !btn) return;
+
+  btn.disabled = true;
+  result.textContent = 'Flipping coin...';
+
+  coin.classList.remove('heads', 'tails', 'flipping');
+  void coin.offsetWidth;            // restart CSS animation
+  coin.classList.add('flipping');
+
+  setTimeout(() => {
+    coin.classList.remove('flipping');
+
+    const isHeads = Math.random() < 0.5;
+    const side = isHeads ? 'HEADS' : 'TAILS';
+
+    coin.classList.remove('heads', 'tails');
+    coin.classList.add(isHeads ? 'heads' : 'tails');
+    coin.textContent = '₹';
+    result.innerHTML = `
+      Result:
+      <span class="badge ${isHeads ? 'toss-heads-badge' : 'toss-tails-badge'}">
+        ${side}
+      </span>
+    `;
+    btn.disabled = false;
+  }, 1100);
+}
+
+
+
+

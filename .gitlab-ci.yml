@@ -1,6 +1,15 @@
 pages:
   stage: deploy
+  image: node:18-alpine
   script:
+    - npm install -g clean-css-cli terser
+
+    - cleancss -o style.min.css style.css
+    - mv style.min.css style.css
+
+    - terser app.js -c -m -o app.min.js
+    - mv app.min.js app.js
+
     - mkdir .public
     - cp -r * .public
   artifacts:
